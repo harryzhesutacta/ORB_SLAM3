@@ -187,6 +187,11 @@ if(realsense2_FOUND)
     target_link_libraries(stereo_realsense_D435i ${PROJECT_NAME})
 endif()
 
+# Stereo offline example (PNG files)
+add_executable(stereo_realsense_D435i_offline
+        Examples/Stereo/stereo_realsense_D435i_offline.cc)
+target_link_libraries(stereo_realsense_D435i_offline ${PROJECT_NAME})
+
 #Monocular examples
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/Examples/Monocular)
 
