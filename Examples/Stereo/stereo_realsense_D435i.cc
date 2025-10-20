@@ -24,10 +24,13 @@
 #include <chrono>
 #include <ctime>
 #include <sstream>
+#include <iomanip>
+#include <sys/stat.h>
 
 #include <condition_variable>
 
 #include <opencv2/core/core.hpp>
+#include <opencv2/imgcodecs.hpp>
 
 #include <librealsense2/rs.hpp>
 #include "librealsense2/rsutil.h"
@@ -47,6 +50,18 @@ void exit_loop_handler(int s){
 rs2_vector interpolateMeasure(const double target_time,
                               const rs2_vector current_data, const double current_time,
                               const rs2_vector prev_data, const double prev_time);
+
+// Function to create directory if it doesn't exist
+bool createDirectory(const std::string& path) {
+    struct stat st = {0};
+    if (stat(path.c_str(), &st) == -1) {
+        if (mkdir(path.c_str(), 0755) == -1) {
+            std::cerr << "Failed to create directory: " << path << std::endl;
+            return false;
+        }
+    }
+    return true;
+}
 
 static rs2_option get_sensor_option(const rs2::sensor& sensor)
 {
@@ -105,6 +120,19 @@ int main(int argc, char **argv) {
         file_name = string(argv[argc - 1]);
     }
 
+    // Create directories for saving images
+    std::string left_img_dir = "left_images";
+    std::string right_img_dir = "right_images";
+    
+    if (!createDirectory(left_img_dir) || !createDirectory(right_img_dir)) {
+        std::cerr << "Failed to create image directories" << std::endl;
+        return 1;
+    }
+    
+    std::cout << "Created directories: " << left_img_dir << " and " << right_img_dir << std::endl;
+    
+    int image_counter = 0; // Counter for saved images
+
     struct sigaction sigIntHandler;
 
     sigIntHandler.sa_handler = exit_loop_handler;
@@ -134,15 +162,23 @@ int main(int argc, char **argv) {
         if (sensor.supports(RS2_CAMERA_INFO_NAME)) {
             ++index;
             if (index == 1) {
-                sensor.set_option(RS2_OPTION_ENABLE_AUTO_EXPOSURE, 1);
-                sensor.set_option(RS2_OPTION_AUTO_EXPOSURE_LIMIT,5000);
-                sensor.set_option(RS2_OPTION_EMITTER_ENABLED, 0); // switch off emitter
+                if (sensor.supports(RS2_OPTION_ENABLE_AUTO_EXPOSURE)) {
+                    sensor.set_option(RS2_OPTION_ENABLE_AUTO_EXPOSURE, 1);
+                }
+                if (sensor.supports(RS2_OPTION_AUTO_EXPOSURE_LIMIT)) {
+                    sensor.set_option(RS2_OPTION_AUTO_EXPOSURE_LIMIT, 5000);
+                }
+                if (sensor.supports(RS2_OPTION_EMITTER_ENABLED)) {
+                    sensor.set_option(RS2_OPTION_EMITTER_ENABLED, 0); // switch off emitter
+                }
             }
             // std::cout << "  " << index << " : " << sensor.get_info(RS2_CAMERA_INFO_NAME) << std::endl;
             get_sensor_option(sensor);
             if (index == 2){
                 // RGB camera (not used here...)
-                sensor.set_option(RS2_OPTION_EXPOSURE,100.f);
+                if (sensor.supports(RS2_OPTION_EXPOSURE)) {
+                    sensor.set_option(RS2_OPTION_EXPOSURE, 100.f);
+                }
             }
         }
 
@@ -310,6 +346,20 @@ int main(int argc, char **argv) {
 #endif
         // Stereo images are already rectified.
         SLAM.TrackStereo(im, imRight, timestamp);
+        
+        // Save images with timestamp as filename
+        std::stringstream ss_left, ss_right;
+        ss_left << left_img_dir << "/" << std::fixed << std::setprecision(6) << timestamp << "_" << std::setfill('0') << std::setw(6) << image_counter << ".png";
+        ss_right << right_img_dir << "/" << std::fixed << std::setprecision(6) << timestamp << "_" << std::setfill('0') << std::setw(6) << image_counter << ".png";
+        
+        cv::imwrite(ss_left.str(), im);
+        cv::imwrite(ss_right.str(), imRight);
+        
+        image_counter++;
+        
+        if (image_counter % 100 == 0) {
+            std::cout << "Saved " << image_counter << " image pairs" << std::endl;
+        }
 #ifdef REGISTER_TIMES
     #ifdef COMPILEDWITHC11
         std::chrono::steady_clock::time_point t_End_Track = std::chrono::steady_clock::now();
@@ -321,4 +371,21 @@ int main(int argc, char **argv) {
 #endif
     }
     cout << "System shutdown!\n";
+    
+    // Save trajectory in different formats
+    std::cout << "Saving camera trajectory..." << std::endl;
+    
+    // Save trajectory in TUM format
+    SLAM.SaveTrajectoryTUM("CameraTrajectory_TUM.txt");
+    std::cout << "Trajectory saved in TUM format: CameraTrajectory_TUM.txt" << std::endl;
+    
+    // Save trajectory in KITTI format
+    SLAM.SaveTrajectoryKITTI("CameraTrajectory_KITTI.txt");
+    std::cout << "Trajectory saved in KITTI format: CameraTrajectory_KITTI.txt" << std::endl;
+    
+    // Save keyframe trajectory in TUM format
+    SLAM.SaveKeyFrameTrajectoryTUM("KeyFrameTrajectory_TUM.txt");
+    std::cout << "KeyFrame trajectory saved in TUM format: KeyFrameTrajectory_TUM.txt" << std::endl;
+    
+    std::cout << "Total images saved: " << image_counter << " pairs" << std::endl;
 }
