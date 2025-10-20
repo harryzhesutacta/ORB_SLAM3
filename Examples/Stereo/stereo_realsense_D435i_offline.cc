@@ -21,21 +21,23 @@
 #include <fstream>
 #include <chrono>
 #include <iomanip>
+#include <sstream>
+#include <dirent.h>
 #include <opencv2/core/core.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <System.h>
 
 using namespace std;
 
-void LoadImages(const string &strPathLeft, const string &strPathRight, const string &strPathTimes,
+void LoadImages(const string &strPathLeft, const string &strPathRight,
                 vector<string> &vstrImageLeft, vector<string> &vstrImageRight, vector<double> &vTimeStamps);
 
 int main(int argc, char **argv)
 {
-    if (argc < 6)
+    if (argc < 5 || argc > 6)
     {
         cerr << endl
-             << "Usage: ./stereo_realsense_D435i_offline path_to_vocabulary path_to_settings path_to_left_folder path_to_right_folder path_to_times_file (trajectory_file_name)" << endl;
+             << "Usage: ./stereo_realsense_D435i_offline path_to_vocabulary path_to_settings path_to_left_images_folder path_to_right_images_folder (trajectory_file_name)" << endl;
         return 1;
     }
 
@@ -46,9 +48,13 @@ int main(int argc, char **argv)
 
     string pathLeft = string(argv[3]);
     string pathRight = string(argv[4]);
-    string pathTimes = string(argv[5]);
+    
+    string trajectory_file_name = "CameraTrajectory.txt";
+    if (argc == 6) {
+        trajectory_file_name = string(argv[5]);
+    }
 
-    LoadImages(pathLeft, pathRight, pathTimes, vstrImageLeft, vstrImageRight, vTimestamps);
+    LoadImages(pathLeft, pathRight, vstrImageLeft, vstrImageRight, vTimestamps);
 
     if (vstrImageLeft.empty() || vstrImageRight.empty())
     {
@@ -160,55 +166,97 @@ int main(int argc, char **argv)
     cout << "mean tracking time: " << totaltime / nImages << endl;
 
     // Save camera trajectory
-    SLAM.SaveTrajectoryKITTI("CameraTrajectory.txt");
+    SLAM.SaveTrajectoryKITTI(trajectory_file_name);
+    cout << "Trajectory saved to: " << trajectory_file_name << endl;
 
     return 0;
 }
 
-void LoadImages(const string &strPathLeft, const string &strPathRight, const string &strPathTimes,
+void LoadImages(const string &strPathLeft, const string &strPathRight,
                 vector<string> &vstrImageLeft, vector<string> &vstrImageRight, vector<double> &vTimeStamps)
 {
-    ifstream fTimes;
-    fTimes.open(strPathTimes.c_str());
-
-    if (!fTimes.is_open())
-    {
-        cerr << "Failed to open timestamps file: " << strPathTimes << endl;
+    // Structure to hold image data for sorting
+    struct ImageData {
+        double timestamp;
+        string leftPath;
+        string rightPath;
+        int counter;
+    };
+    
+    vector<ImageData> imageData;
+    
+    // Read left images directory
+    DIR* dir = opendir(strPathLeft.c_str());
+    if (dir == nullptr) {
+        cerr << "Cannot open left images directory: " << strPathLeft << endl;
         return;
     }
-
-    vTimeStamps.reserve(5000);
-    vstrImageLeft.reserve(5000);
-    vstrImageRight.reserve(5000);
-
-    while (!fTimes.eof())
-    {
-        string s;
-        getline(fTimes, s);
-        if (!s.empty())
-        {
-            if (s[0] == '#')
+    
+    struct dirent* entry;
+    while ((entry = readdir(dir)) != nullptr) {
+        string filename = entry->d_name;
+        
+        // Skip . and .. directories
+        if (filename == "." || filename == "..") continue;
+        
+        // Check if it's a PNG file
+        if (filename.find(".png") == string::npos) continue;
+        
+        // Extract timestamp and counter from filename: timestamp_counter.png
+        size_t underscorePos = filename.find('_');
+        size_t dotPos = filename.find(".png");
+        
+        if (underscorePos != string::npos && dotPos != string::npos) {
+            string timestampStr = filename.substr(0, underscorePos);
+            string counterStr = filename.substr(underscorePos + 1, dotPos - underscorePos - 1);
+            
+            try {
+                double timestamp = stod(timestampStr);
+                int counter = stoi(counterStr);
+                
+                // Create corresponding right image path
+                string rightImagePath = strPathRight + "/" + filename;
+                string leftImagePath = strPathLeft + "/" + filename;
+                
+                // Check if right image exists
+                ifstream rightFile(rightImagePath);
+                if (rightFile.good()) {
+                    ImageData data;
+                    data.timestamp = timestamp;
+                    data.leftPath = leftImagePath;
+                    data.rightPath = rightImagePath;
+                    data.counter = counter;
+                    imageData.push_back(data);
+                }
+                rightFile.close();
+            } catch (const exception& e) {
+                cerr << "Error parsing filename: " << filename << " - " << e.what() << endl;
                 continue;
-
-            stringstream ss;
-            ss << s;
-            double t;
-            string filename;
-            ss >> t;
-            ss >> filename;
-
-            vTimeStamps.push_back(t);
-            vstrImageLeft.push_back(strPathLeft + "/" + filename);
-
-            // Create right filename by replacing "left" with "right" in the filename
-            string filenameRight = filename;
-            size_t pos = filenameRight.find("left");
-            if (pos != string::npos)
-            {
-                filenameRight.replace(pos, 4, "right");
             }
-
-            vstrImageRight.push_back(strPathRight + "/" + filenameRight);
         }
+    }
+    closedir(dir);
+    
+    // Sort by timestamp to ensure correct order
+    sort(imageData.begin(), imageData.end(), 
+         [](const ImageData& a, const ImageData& b) {
+             return a.timestamp < b.timestamp;
+         });
+    
+    // Fill output vectors
+    vTimeStamps.reserve(imageData.size());
+    vstrImageLeft.reserve(imageData.size());
+    vstrImageRight.reserve(imageData.size());
+    
+    for (const auto& data : imageData) {
+        vTimeStamps.push_back(data.timestamp);
+        vstrImageLeft.push_back(data.leftPath);
+        vstrImageRight.push_back(data.rightPath);
+    }
+    
+    cout << "Loaded " << imageData.size() << " stereo image pairs" << endl;
+    if (!imageData.empty()) {
+        cout << "Timestamp range: " << imageData.front().timestamp 
+             << " to " << imageData.back().timestamp << endl;
     }
 }
