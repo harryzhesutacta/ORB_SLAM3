@@ -49,6 +49,8 @@ int main(int argc, char **argv)
     string pathLeft = string(argv[3]);
     string pathRight = string(argv[4]);
 
+    int max_lost_frames = 60;
+    int n_lost_frames = 0;
     // Default: save trajectory to /home/harrysu/data/realsense_camera/image_folder
     string trajectory_file_name = "/home/harrysu/data/realsense_camera/image_folder/CameraTrajectory.txt";
     if (argc == 6)
@@ -85,7 +87,7 @@ int main(int argc, char **argv)
     // Create SLAM system. It initializes all system threads and gets ready to process frames.
     // Set the last parameter to false to disable the viewer and avoid GUI-related crashes
 
-    ORB_SLAM3::System SLAM(argv[1], argv[2], ORB_SLAM3::System::STEREO, true);
+    ORB_SLAM3::System SLAM(argv[1], argv[2], ORB_SLAM3::System::STEREO, false);
     float imageScale = SLAM.GetImageScale();
 
     cv::Mat imLeft, imRight;
@@ -130,8 +132,19 @@ int main(int argc, char **argv)
 #endif
 
         // Pass the images to the SLAM system
-        SLAM.TrackStereo(imLeft, imRight, tframe);
-
+        auto result = SLAM.TrackStereo(imLeft, imRight, tframe);
+        // check lost frames
+        if (!result.second)
+        {
+            n_lost_frames += 1;
+            std::cout << "n_lost_frames=" << n_lost_frames << std::endl;
+        }
+        if ((max_lost_frames > 0) && (n_lost_frames >= max_lost_frames))
+        {
+            std::cout << "Lost tracking on " << n_lost_frames << " >= " << max_lost_frames << " frames. Terminating!" << std::endl;
+            SLAM.Shutdown();
+            return 1;
+        }
 #ifdef COMPILEDWITHC11
         std::chrono::steady_clock::time_point t2 = std::chrono::steady_clock::now();
 #else
